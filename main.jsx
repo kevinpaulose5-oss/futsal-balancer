@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ADMIN_PASSWORD = "futsal123";
-const SK_PLAYERS = "futsal_players_v2";
-const SK_TEAMS = "futsal_teams_v2";
-const SK_ATTENDING = "futsal_attending_v2";
-const SK_NUMTEAMS = "futsal_numteams_v2";
-
 const COLORS = ["#1D9E75","#185FA5","#D85A30","#D4537E","#7F77DD"];
 const TEAM_NAMES = ["Team A","Team B","Team C","Team D","Team E"];
 
@@ -31,9 +31,6 @@ function avg(team) {
   if (!team.length) return "0.0";
   return (team.reduce((s,p)=>s+p.rating,0)/team.length).toFixed(1);
 }
-
-function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
-function load(key, fallback) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
 
 function StarRating({value, onChange}) {
   const [hover, setHover] = useState(0);
@@ -62,59 +59,77 @@ function App() {
   const [pwError, setPwError] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [tab, setTab] = useState("roster");
-  const [players, setPlayers] = useState(()=>load(SK_PLAYERS,[]));
-  const [attending, setAttending] = useState(()=>load(SK_ATTENDING,{}));
-  const [teams, setTeams] = useState(()=>load(SK_TEAMS,null));
-  const [numTeams, setNumTeams] = useState(()=>load(SK_NUMTEAMS,3));
+  const [players, setPlayers] = useState([]);
+  const [teams, setTeams] = useState(null);
+  const [numTeams, setNumTeams] = useState(3);
   const [newName, setNewName] = useState("");
   const [newRating, setNewRating] = useState(5);
   const [editId, setEditId] = useState(null);
   const [editRating, setEditRating] = useState(5);
   const [showShare, setShowShare] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  function savePlayers(p) { setPlayers(p); save(SK_PLAYERS,p); }
-  function saveTeams(t) { setTeams(t); save(SK_TEAMS,t); }
-  function saveAttending(a) { setAttending(a); save(SK_ATTENDING,a); }
-  function saveNumTeams(n) { setNumTeams(n); save(SK_NUMTEAMS,n); setTeams(null); save(SK_TEAMS,null); }
+  useEffect(() => { loadData(); }, []);
+
+  async function loadData() {
+    setLoading(true);
+    const { data: p } = await supabase.from("players").select("*").order("rating", {ascending:false});
+    if (p) setPlayers(p);
+    const { data: c } = await supabase.from("config").select("*").eq("id",1).single();
+    if (c) { setNumTeams(c.num_teams); setTeams(c.teams_json ? JSON.parse(c.teams_json) : null); }
+    setLoading(false);
+  }
+
+  async function addPlayer() {
+    if (!newName.trim()) return;
+    const { data } = await supabase.from("players").insert({name:newName.trim(), rating:newRating, attending:false}).select().single();
+    if (data) setPlayers(prev => [...prev, data].sort((a,b)=>b.rating-a.rating));
+    setNewName(""); setNewRating(5);
+  }
+
+  async function removePlayer(id) {
+    await supabase.from("players").delete().eq("id",id);
+    setPlayers(prev => prev.filter(p=>p.id!==id));
+  }
+
+  async function saveEdit(id) {
+    await supabase.from("players").update({rating:editRating}).eq("id",id);
+    setPlayers(prev => prev.map(p=>p.id===id?{...p,rating:editRating}:p).sort((a,b)=>b.rating-a.rating));
+    setEditId(null);
+  }
+
+  async function toggleAttend(id, current) {
+    await supabase.from("players").update({attending:!current}).eq("id",id);
+    setPlayers(prev => prev.map(p=>p.id===id?{...p,attending:!current}:p));
+    setTeams(null);
+    await supabase.from("config").update({teams_json:null}).eq("id",1);
+  }
+
+  async function saveNumTeams(n) {
+    setNumTeams(n); setTeams(null);
+    await supabase.from("config").update({num_teams:n, teams_json:null}).eq("id",1);
+  }
+
+  async function generate(shuffle) {
+    let present = players.filter(p=>p.attending);
+    if (shuffle) for(let i=present.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[present[i],present[j]]=[present[j],present[i]];}
+    const t = balanceTeams(present, numTeams);
+    setTeams(t);
+    await supabase.from("config").update({teams_json:JSON.stringify(t)}).eq("id",1);
+    setTab("teams");
+  }
 
   function login() {
     if (pwInput === ADMIN_PASSWORD) { setIsAdmin(true); setShowLogin(false); setPwError(false); setPwInput(""); }
     else setPwError(true);
   }
 
-  function addPlayer() {
-    if (!newName.trim()) return;
-    savePlayers([...players, {id:Date.now().toString(), name:newName.trim(), rating:newRating}]);
-    setNewName(""); setNewRating(5);
-  }
-
-  function removePlayer(id) {
-    savePlayers(players.filter(p=>p.id!==id));
-    const a={...attending}; delete a[id]; saveAttending(a);
-  }
-
-  function saveEdit(id) {
-    savePlayers(players.map(p=>p.id===id?{...p,rating:editRating}:p));
-    setEditId(null);
-  }
-
-  function toggleAttend(id) {
-    const a={...attending,[id]:!attending[id]};
-    saveAttending(a); setTeams(null); save(SK_TEAMS,null);
-  }
-
-  function generate(shuffle) {
-    let present = players.filter(p=>attending[p.id]);
-    if (shuffle) for(let i=present.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[present[i],present[j]]=[present[j],present[i]];}
-    saveTeams(balanceTeams(present, numTeams));
-  }
-
   function copyLink() {
-    navigator.clipboard.writeText(window.location.href).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);}).catch(()=>{});
+    navigator.clipboard.writeText(window.location.href).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
   }
 
-  const attendingCount = players.filter(p=>attending[p.id]).length;
+  const attendingCount = players.filter(p=>p.attending).length;
 
   const c = {
     card: {background:"#fff",border:"0.5px solid #e5e5e0",borderRadius:12,padding:"0.875rem 1rem",marginBottom:8},
@@ -131,8 +146,10 @@ function App() {
     checkbox: {width:20,height:20,cursor:"pointer",accentColor:"#1D9E75",flexShrink:0},
   };
 
+  if (loading) return <div style={{padding:"2rem",textAlign:"center",color:"#888"}}>Loading...</div>;
+
   return (
-    <div>
+    <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",maxWidth:640,margin:"0 auto",padding:"1rem 0.75rem"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1.25rem",flexWrap:"wrap",gap:8}}>
         <h1 style={{fontSize:22,fontWeight:700,margin:0}}>⚽ Futsal Balancer</h1>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -180,11 +197,12 @@ function App() {
             </div>
           )}
           {players.length===0 && <p style={{color:"#888",fontSize:14}}>{isAdmin?"Add your first player above!":"No players yet."}</p>}
-          {[...players].sort((a,b)=>b.rating-a.rating).map(p=>(
+          {players.map(p=>(
             <div key={p.id} style={c.card}>
               <div style={c.row}>
-                <RatingBadge r={p.rating} />
+                {isAdmin && <RatingBadge r={p.rating} />}
                 <span style={c.name}>{p.name}</span>
+                {!isAdmin && <span style={{fontSize:13,color:"#aaa"}}>⭐ Hidden</span>}
                 {isAdmin && editId!==p.id && <button style={{...c.btn(),padding:"4px 10px",fontSize:13}} onClick={()=>{setEditId(p.id);setEditRating(p.rating)}}>Edit</button>}
                 {isAdmin && <button style={{...c.btn("#A32D2D"),padding:"4px 10px",fontSize:13}} onClick={()=>removePlayer(p.id)}>Remove</button>}
               </div>
@@ -220,13 +238,12 @@ function App() {
           {!isAdmin && <div style={{...c.card,marginBottom:12}}><span style={{fontSize:14,color:"#555"}}>Today: <strong>{numTeams} teams</strong> · {attendingCount} players attending</span></div>}
           <p style={{margin:"0 0 10px",fontSize:14,color:"#555"}}>{isAdmin?"Tap to mark who's coming:":"Today's attendance:"}</p>
           {players.length===0 && <p style={{color:"#888",fontSize:14}}>No players in roster yet.</p>}
-          {[...players].sort((a,b)=>b.rating-a.rating).map(p=>(
-            <div key={p.id} style={{...c.card,opacity:attending[p.id]?1:0.55,cursor:isAdmin?"pointer":"default"}} onClick={()=>isAdmin&&toggleAttend(p.id)}>
+          {players.map(p=>(
+            <div key={p.id} style={{...c.card,opacity:p.attending?1:0.55,cursor:isAdmin?"pointer":"default"}} onClick={()=>isAdmin&&toggleAttend(p.id,p.attending)}>
               <div style={c.row}>
                 {isAdmin
-                  ? <input type="checkbox" style={c.checkbox} checked={!!attending[p.id]} onChange={()=>toggleAttend(p.id)} onClick={e=>e.stopPropagation()} />
-                  : <span style={{fontSize:16,flexShrink:0}}>{attending[p.id]?"✅":"⬜"}</span>}
-                <RatingBadge r={p.rating} />
+                  ? <input type="checkbox" style={c.checkbox} checked={!!p.attending} onChange={()=>toggleAttend(p.id,p.attending)} onClick={e=>e.stopPropagation()} />
+                  : <span style={{fontSize:16,flexShrink:0}}>{p.attending?"✅":"⬜"}</span>}
                 <span style={c.name}>{p.name}</span>
               </div>
             </div>
@@ -254,10 +271,10 @@ function App() {
                 {teams.map((team,i)=>(
                   <div key={i} style={c.teamCard(i)}>
                     <div style={{fontSize:15,fontWeight:700,color:COLORS[i],marginBottom:4}}>{TEAM_NAMES[i]}</div>
-                    <div style={{fontSize:12,color:"#888",marginBottom:10}}>Avg {avg(team)}</div>
+                    {isAdmin && <div style={{fontSize:12,color:"#888",marginBottom:10}}>Avg {avg(team)}</div>}
                     {team.map(p=>(
                       <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:"0.5px solid #eee"}}>
-                        <RatingBadge r={p.rating} />
+                        {isAdmin && <RatingBadge r={p.rating} />}
                         <span style={{fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
                       </div>
                     ))}
@@ -274,7 +291,7 @@ function App() {
         <div style={c.overlay} onClick={()=>setShowShare(false)}>
           <div style={c.modal} onClick={e=>e.stopPropagation()}>
             <p style={{marginBottom:6,fontSize:16,fontWeight:700}}>Share with teammates</p>
-            <p style={{marginBottom:14,fontSize:13,color:"#555"}}>Send them this link — they'll see teams and ratings in view-only mode.</p>
+            <p style={{marginBottom:14,fontSize:13,color:"#555"}}>They'll see the teams in view-only mode. Ratings are hidden.</p>
             <div style={{background:"#f5f5f0",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#333",wordBreak:"break-all",textAlign:"left",marginBottom:12}}>
               {window.location.href}
             </div>
