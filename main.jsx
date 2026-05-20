@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = "https://xjcspcnvyvoyecldeqtx.supabase.co/rest/v1/";
-const SUPABASE_ANON_KEY = "sb_secret_YLHmexaUQnMtHaXjaI_vCA_dURxHEvA";
+const SUPABASE_URL = "https://xjcspcnvyvoyecldeqtx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqY3NwY252eXZveWVjbGRlcXR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4MjM2NjUsImV4cCI6MjA5NDM5OTY2NX0.4xf-aoR-64ZIsGv_ogqwSksLOQgJt8nfat3O9qKKy6s";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ADMIN_PASSWORD = "futsal123";
