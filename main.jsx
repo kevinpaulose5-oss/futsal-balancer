@@ -2,34 +2,47 @@ import { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = "https://xjcspcnvyvoyecldeqtx.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhqY3NwY252eXZveWVjbGRlcXR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4MjM2NjUsImV4cCI6MjA5NDM5OTY2NX0.4xf-aoR-64ZIsGv_ogqwSksLOQgJt8nfat3O9qKKy6s";
+const SUPABASE_URL = "https://xjcspcnvyvoyecldeqtx.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_secret_YLHmexaUQnMtHaXjaI_vCA_dURxHEvA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ADMIN_PASSWORD = "futsal123";
 const COLORS = ["#1D9E75","#185FA5","#D85A30","#D4537E","#7F77DD"];
 const TEAM_NAMES = ["Team A","Team B","Team C","Team D","Team E"];
 
+function calcOverall(attack, defence) {
+  return Math.round((attack + defence) / 2);
+}
+
 function balanceTeams(players, n) {
-  const sorted = [...players].sort((a,b) => b.rating - a.rating);
+  // Score each player equally on attack + defence
+  const scored = players.map(p => ({
+    ...p,
+    _score: p.attack + p.defence
+  })).sort((a,b) => b._score - a._score);
+
   const teams = Array.from({length:n}, ()=>[]);
-  const sums = Array(n).fill(0);
-  sorted.forEach((p,i) => {
-    const snake = Math.floor(i/n) % 2 === 0;
-    let pick = snake ? 0 : n-1;
-    for (let t = 0; t < n; t++) {
-      const idx = snake ? t : n-1-t;
-      if (sums[idx] < sums[pick]) pick = idx;
+  const atkSums = Array(n).fill(0);
+  const defSums = Array(n).fill(0);
+
+  scored.forEach(p => {
+    // Pick team with lowest combined attack+defence sum
+    let pick = 0;
+    let minSum = Infinity;
+    for (let i = 0; i < n; i++) {
+      const s = atkSums[i] + defSums[i];
+      if (s < minSum) { minSum = s; pick = i; }
     }
     teams[pick].push(p);
-    sums[pick] += p.rating;
+    atkSums[pick] += p.attack;
+    defSums[pick] += p.defence;
   });
   return teams;
 }
 
-function avg(team) {
+function teamAvg(team, key) {
   if (!team.length) return "0.0";
-  return (team.reduce((s,p)=>s+p.rating,0)/team.length).toFixed(1);
+  return (team.reduce((s,p)=>s+p[key],0)/team.length).toFixed(1);
 }
 
 function StarRating({value, onChange}) {
@@ -47,10 +60,13 @@ function StarRating({value, onChange}) {
   );
 }
 
-function RatingBadge({r}) {
-  const bg = r>=8?"#EAF3DE":r>=5?"#FAEEDA":"#FAECE7";
-  const color = r>=8?"#3B6D11":r>=5?"#854F0B":"#993C1D";
-  return <div style={{fontSize:13,fontWeight:600,width:28,height:28,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",background:bg,color,flexShrink:0}}>{r}</div>;
+function StatBadge({label, value, color}) {
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",background:color+"18",borderRadius:8,padding:"4px 10px",minWidth:48}}>
+      <span style={{fontSize:11,color:color,fontWeight:600}}>{label}</span>
+      <span style={{fontSize:15,fontWeight:700,color}}>{value}</span>
+    </div>
+  );
 }
 
 function App() {
@@ -63,9 +79,11 @@ function App() {
   const [teams, setTeams] = useState(null);
   const [numTeams, setNumTeams] = useState(3);
   const [newName, setNewName] = useState("");
-  const [newRating, setNewRating] = useState(5);
+  const [newAttack, setNewAttack] = useState(5);
+  const [newDefence, setNewDefence] = useState(5);
   const [editId, setEditId] = useState(null);
-  const [editRating, setEditRating] = useState(5);
+  const [editAttack, setEditAttack] = useState(5);
+  const [editDefence, setEditDefence] = useState(5);
   const [showShare, setShowShare] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -74,7 +92,7 @@ function App() {
 
   async function loadData() {
     setLoading(true);
-    const { data: p } = await supabase.from("players").select("*").order("rating", {ascending:false});
+    const { data: p } = await supabase.from("players").select("*").order("attack", {ascending:false});
     if (p) setPlayers(p);
     const { data: c } = await supabase.from("config").select("*").eq("id",1).single();
     if (c) { setNumTeams(c.num_teams); setTeams(c.teams_json ? JSON.parse(c.teams_json) : null); }
@@ -83,9 +101,12 @@ function App() {
 
   async function addPlayer() {
     if (!newName.trim()) return;
-    const { data } = await supabase.from("players").insert({name:newName.trim(), rating:newRating, attending:false}).select().single();
-    if (data) setPlayers(prev => [...prev, data].sort((a,b)=>b.rating-a.rating));
-    setNewName(""); setNewRating(5);
+    const rating = calcOverall(newAttack, newDefence);
+    const { data } = await supabase.from("players").insert({
+      name: newName.trim(), rating, attack: newAttack, defence: newDefence, attending: false
+    }).select().single();
+    if (data) setPlayers(prev => [...prev, data].sort((a,b)=>calcOverall(b.attack,b.defence)-calcOverall(a.attack,a.defence)));
+    setNewName(""); setNewAttack(5); setNewDefence(5);
   }
 
   async function removePlayer(id) {
@@ -94,8 +115,9 @@ function App() {
   }
 
   async function saveEdit(id) {
-    await supabase.from("players").update({rating:editRating}).eq("id",id);
-    setPlayers(prev => prev.map(p=>p.id===id?{...p,rating:editRating}:p).sort((a,b)=>b.rating-a.rating));
+    const rating = calcOverall(editAttack, editDefence);
+    await supabase.from("players").update({attack:editAttack, defence:editDefence, rating}).eq("id",id);
+    setPlayers(prev => prev.map(p=>p.id===id?{...p,attack:editAttack,defence:editDefence,rating}:p));
     setEditId(null);
   }
 
@@ -186,32 +208,54 @@ function App() {
           {isAdmin && (
             <div style={{...c.card,marginBottom:12}}>
               <p style={{marginBottom:10,fontSize:14,fontWeight:600}}>Add player</p>
-              <input style={{...c.input,width:"100%",marginBottom:10}} placeholder="Player name"
+              <input style={{...c.input,width:"100%",marginBottom:14}} placeholder="Player name"
                 value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addPlayer()} />
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
-                <span style={{fontSize:13,color:"#555"}}>Rating:</span>
-                <StarRating value={newRating} onChange={setNewRating} />
-                <span style={{fontSize:14,fontWeight:600}}>{newRating}/10</span>
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#E85D26",width:60}}>⚔️ Attack</span>
+                  <StarRating value={newAttack} onChange={setNewAttack} />
+                  <span style={{fontSize:14,fontWeight:600}}>{newAttack}/10</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#185FA5",width:60}}>🛡️ Defence</span>
+                  <StarRating value={newDefence} onChange={setNewDefence} />
+                  <span style={{fontSize:14,fontWeight:600}}>{newDefence}/10</span>
+                </div>
               </div>
+              <div style={{fontSize:13,color:"#888",marginBottom:12}}>Overall: {calcOverall(newAttack,newDefence)}/10</div>
               <button style={c.btn("#185FA5","#EBF4FD")} onClick={addPlayer}>Add player</button>
             </div>
           )}
           {players.length===0 && <p style={{color:"#888",fontSize:14}}>{isAdmin?"Add your first player above!":"No players yet."}</p>}
-          {players.map(p=>(
+          {[...players].sort((a,b)=>calcOverall(b.attack,b.defence)-calcOverall(a.attack,a.defence)).map(p=>(
             <div key={p.id} style={c.card}>
               <div style={c.row}>
-                {isAdmin && <RatingBadge r={p.rating} />}
                 <span style={c.name}>{p.name}</span>
-                {!isAdmin && <span style={{fontSize:13,color:"#aaa"}}>⭐ Hidden</span>}
-                {isAdmin && editId!==p.id && <button style={{...c.btn(),padding:"4px 10px",fontSize:13}} onClick={()=>{setEditId(p.id);setEditRating(p.rating)}}>Edit</button>}
+                {isAdmin && (
+                  <div style={{display:"flex",gap:6}}>
+                    <StatBadge label="ATK" value={p.attack} color="#E85D26" />
+                    <StatBadge label="DEF" value={p.defence} color="#185FA5" />
+                    <StatBadge label="OVR" value={calcOverall(p.attack,p.defence)} color="#555" />
+                  </div>
+                )}
+                {isAdmin && editId!==p.id && <button style={{...c.btn(),padding:"4px 10px",fontSize:13}} onClick={()=>{setEditId(p.id);setEditAttack(p.attack);setEditDefence(p.defence)}}>Edit</button>}
                 {isAdmin && <button style={{...c.btn("#A32D2D"),padding:"4px 10px",fontSize:13}} onClick={()=>removePlayer(p.id)}>Remove</button>}
               </div>
               {isAdmin && editId===p.id && (
                 <div style={{marginTop:10,paddingTop:10,borderTop:"0.5px solid #eee"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
-                    <StarRating value={editRating} onChange={setEditRating} />
-                    <span style={{fontSize:14,fontWeight:600}}>{editRating}/10</span>
+                  <div style={{marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                      <span style={{fontSize:13,fontWeight:600,color:"#E85D26",width:60}}>⚔️ Attack</span>
+                      <StarRating value={editAttack} onChange={setEditAttack} />
+                      <span style={{fontSize:14,fontWeight:600}}>{editAttack}/10</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                      <span style={{fontSize:13,fontWeight:600,color:"#185FA5",width:60}}>🛡️ Defence</span>
+                      <StarRating value={editDefence} onChange={setEditDefence} />
+                      <span style={{fontSize:14,fontWeight:600}}>{editDefence}/10</span>
+                    </div>
                   </div>
+                  <div style={{fontSize:13,color:"#888",marginBottom:10}}>Overall: {calcOverall(editAttack,editDefence)}/10</div>
                   <div style={{display:"flex",gap:8}}>
                     <button style={c.btn("#1D9E75","#E1F5EE")} onClick={()=>saveEdit(p.id)}>Save</button>
                     <button style={c.btn()} onClick={()=>setEditId(null)}>Cancel</button>
@@ -238,7 +282,7 @@ function App() {
           {!isAdmin && <div style={{...c.card,marginBottom:12}}><span style={{fontSize:14,color:"#555"}}>Today: <strong>{numTeams} teams</strong> · {attendingCount} players attending</span></div>}
           <p style={{margin:"0 0 10px",fontSize:14,color:"#555"}}>{isAdmin?"Tap to mark who's coming:":"Today's attendance:"}</p>
           {players.length===0 && <p style={{color:"#888",fontSize:14}}>No players in roster yet.</p>}
-          {players.map(p=>(
+          {[...players].sort((a,b)=>calcOverall(b.attack,b.defence)-calcOverall(a.attack,a.defence)).map(p=>(
             <div key={p.id} style={{...c.card,opacity:p.attending?1:0.55,cursor:isAdmin?"pointer":"default"}} onClick={()=>isAdmin&&toggleAttend(p.id,p.attending)}>
               <div style={c.row}>
                 {isAdmin
@@ -271,10 +315,14 @@ function App() {
                 {teams.map((team,i)=>(
                   <div key={i} style={c.teamCard(i)}>
                     <div style={{fontSize:15,fontWeight:700,color:COLORS[i],marginBottom:4}}>{TEAM_NAMES[i]}</div>
-                    {isAdmin && <div style={{fontSize:12,color:"#888",marginBottom:10}}>Avg {avg(team)}</div>}
+                    {isAdmin && (
+                      <div style={{display:"flex",gap:6,marginBottom:10}}>
+                        <StatBadge label="ATK" value={teamAvg(team,"attack")} color="#E85D26" />
+                        <StatBadge label="DEF" value={teamAvg(team,"defence")} color="#185FA5" />
+                      </div>
+                    )}
                     {team.map(p=>(
                       <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:"0.5px solid #eee"}}>
-                        {isAdmin && <RatingBadge r={p.rating} />}
                         <span style={{fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
                       </div>
                     ))}
@@ -291,7 +339,7 @@ function App() {
         <div style={c.overlay} onClick={()=>setShowShare(false)}>
           <div style={c.modal} onClick={e=>e.stopPropagation()}>
             <p style={{marginBottom:6,fontSize:16,fontWeight:700}}>Share with teammates</p>
-            <p style={{marginBottom:14,fontSize:13,color:"#555"}}>They'll see the teams in view-only mode. Ratings are hidden.</p>
+            <p style={{marginBottom:14,fontSize:13,color:"#555"}}>They'll see teams only — no ratings shown.</p>
             <div style={{background:"#f5f5f0",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#333",wordBreak:"break-all",textAlign:"left",marginBottom:12}}>
               {window.location.href}
             </div>
